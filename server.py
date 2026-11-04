@@ -161,6 +161,37 @@ def median_close_hours(
 
 
 @mcp.tool(annotations=READ_ONLY)
+def open_backlog(service: str | None = None, neighborhood: str | None = None) -> dict:
+    """How many 311 requests opened this week are still open, for a service and/or neighborhood.
+
+    Returns open, closed, and total counts, the percent still open, and the
+    oldest request that is still open (id, opened time, and block-level
+    address). Use this for "how many are still open", "what's the backlog",
+    or "what share is unresolved" questions. For open counts broken down
+    across many services or neighborhoods, use count_requests with
+    group_by="status" per filter; for close times, use median_close_hours.
+
+    service and neighborhood must match the exact names from dataset_info.
+    """
+    rows = _matching(service, neighborhood)
+    still_open = [r for r in rows if r.status == "Open"]
+    oldest = min(still_open, key=lambda r: r.opened, default=None)
+    return {
+        "service": service,
+        "neighborhood": neighborhood,
+        "open": len(still_open),
+        "closed": len(rows) - len(still_open),
+        "total": len(rows),
+        "percent_open": round(100 * len(still_open) / len(rows), 1) if rows else None,
+        "oldest_open": (
+            {"request_id": oldest.request_id, "opened": oldest.opened.isoformat(), "address": _mask_address(oldest.address)}
+            if oldest
+            else None
+        ),
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
 def search_requests(
     service: str | None = None,
     neighborhood: str | None = None,
