@@ -242,6 +242,33 @@ def count_in_neighborhood(name: str, ctx: Context, boundary: str | None = None) 
 
 
 @mcp.tool(annotations=READ_ONLY)
+def local_name_breakdown(name: str) -> dict:
+    """Split a local neighborhood name's 311 requests across the official neighborhoods it overlaps.
+
+    Returns the total for the local area and, for each overlapped official
+    neighborhood, its count and percent share, largest first. Use this for
+    "which part holds the most" or "how is <local name> split" questions.
+    For one number, use count_in_neighborhood.
+    """
+    name = name.strip()
+    if name not in LOCAL_NAMES:
+        hint = closest(name, LOCAL_NAMES)
+        suggestion = f" Did you mean: {', '.join(hint)}?" if hint else ""
+        official = " That is an official neighborhood; use count_requests." if name in NEIGHBORHOODS else ""
+        raise ToolError(f"{name!r} is not a local neighborhood name.{official}{suggestion}")
+    area = [r for r in REQUESTS if r.local_name == name]
+    counts = Counter(r.neighborhood for r in area if r.neighborhood)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:MAX_ROWS]
+    return {
+        "local_name": name,
+        "total": len(area),
+        "parts": [
+            {"neighborhood": n, "requests": c, "percent": round(100 * c / len(area), 1)} for n, c in ranked
+        ],
+    }
+
+
+@mcp.tool(annotations=READ_ONLY)
 def search_requests(
     service: str | None = None,
     neighborhood: str | None = None,
