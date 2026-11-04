@@ -9,11 +9,11 @@ from collections import Counter, defaultdict
 from statistics import median
 from typing import Literal
 
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
 from sf311.data import BY_ID, LOCAL_NAMES, NEIGHBORHOODS, REQUESTS, SERVICES, Request, closest
-from sf311.kit import caller_email
+from sf311.kit import ask_choice, caller_email, read_choice
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
@@ -189,6 +189,56 @@ def open_backlog(service: str | None = None, neighborhood: str | None = None) ->
             else None
         ),
     }
+
+
+@mcp.tool(annotations=READ_ONLY)
+def count_in_neighborhood(name: str, ctx: Context, boundary: str | None = None) -> int | str:
+    """Count 311 requests for a neighborhood name people use, official or local.
+
+    Accepts the 41 official neighborhoods ("Mission") and local names
+    ("Lower Nob Hill", "Duboce Triangle"). Returns a single count. When a
+    local name overlaps several official neighborhoods, the user is asked
+    which part to count unless `boundary` is given: pass one of the
+    overlapped official neighborhoods, or "all" for the whole local area.
+    If the user declines, returns a message and counts nothing; call again
+    with boundary="all" or a specific part. For counts by service or other
+    groupings within official neighborhoods, use count_requests.
+    """
+    name = name.strip()
+    if name in NEIGHBORHOODS:
+        return sum(1 for r in REQUESTS if r.neighborhood == name)
+    if name not in LOCAL_NAMES:
+        hint = closest(name, NEIGHBORHOODS + LOCAL_NAMES)
+        suggestion = f" Did you mean: {', '.join(hint)}?" if hint else ""
+        raise ToolError(f"Unknown neighborhood {name!r}.{suggestion} Call dataset_info for the official names.")
+
+    area = [r for r in REQUESTS if r.local_name == name]
+    parts = sorted({r.neighborhood for r in area if r.neighborhood})
+    all_option = f"All of {name}"
+
+    if boundary is None and len(parts) > 1:
+        choice = read_choice(ctx, "boundary")
+        if choice is None:
+            return ask_choice(
+                "boundary",
+                f"{name} overlaps {len(parts)} official neighborhoods. Which part should I count?",
+                parts + [all_option],
+            )
+        if not choice.accepted:
+            return (
+                f"Nothing was counted: the user did not choose a part of {name}. "
+                f"Call again with boundary set to one of {', '.join(parts)}, or 'all'."
+            )
+        boundary = choice.value
+
+    if boundary is None or boundary.strip().lower() == "all" or boundary == all_option:
+        return len(area)
+    boundary = boundary.strip()
+    if boundary not in parts:
+        raise ToolError(
+            f"{boundary!r} is not part of {name}. Use one of {', '.join(parts)}, or 'all' for the whole area."
+        )
+    return sum(1 for r in area if r.neighborhood == boundary)
 
 
 @mcp.tool(annotations=READ_ONLY)
