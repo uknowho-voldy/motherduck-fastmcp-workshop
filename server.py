@@ -3,6 +3,8 @@
 FastMCP Gateway runs this file. Its entrypoint setting is `server.py:mcp`.
 """
 
+import logging
+import re
 from collections import Counter, defaultdict
 from statistics import median
 from typing import Literal
@@ -11,8 +13,12 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from sf311.data import BY_ID, LOCAL_NAMES, NEIGHBORHOODS, REQUESTS, SERVICES, Request, closest
+from sf311.kit import caller_email
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 mcp = FastMCP("sf-311")
+log = logging.getLogger("sf311.server")
 
 MAX_ROWS = 50
 MIN_CLOSED_FOR_MEDIAN = 10
@@ -29,6 +35,28 @@ GROUPS = {
 
 CountGroup = Literal["neighborhood", "service", "agency", "source", "weekday", "status"]
 MedianGroup = Literal["neighborhood", "agency"]
+
+
+HOUSE_NUMBER = re.compile(r"^(\d+)\s+([^,]+)")
+
+
+def _mask_address(address: str) -> str:
+    """Cut a street address to its block: "994 HARRISON ST, ..." -> "900 block of HARRISON ST".
+
+    Addresses without a house number, such as intersections, are returned unchanged.
+    """
+    match = HOUSE_NUMBER.match(address or "")
+    if not match:
+        return address
+    block = int(match.group(1)) // 100 * 100
+    return f"{block} block of {match.group(2).strip()}"
+
+
+def _public(request: Request) -> dict:
+    """The row a tool may return: every field, with the address masked to the block."""
+    row = request.as_dict()
+    row["address"] = _mask_address(row["address"])
+    return row
 
 
 def _check_service(service: str | None) -> None:
@@ -141,6 +169,8 @@ def search_requests(
 ) -> list[dict]:
     """List individual 311 requests, newest first, up to `limit` rows (1 to 50).
 
+    Addresses are given only to the block ("900 block of HARRISON ST").
+
     Use this to look at examples or details of specific requests. For counts,
     rankings, or timing, use count_requests or median_close_hours instead:
     this tool returns a sample, not every match. Use get_request when you
@@ -150,19 +180,21 @@ def search_requests(
         raise ToolError(f"limit must be between 1 and {MAX_ROWS}. For totals, use count_requests instead.")
     rows = _matching(service, neighborhood, status)
     rows.sort(key=lambda r: r.opened, reverse=True)
-    return [r.as_dict() for r in rows[:limit]]
+    return [_public(r) for r in rows[:limit]]
 
 
 @mcp.tool(annotations=READ_ONLY)
 def get_request(request_id: str) -> dict:
     """Return one 311 request by its request_id, with every field.
 
+    The address is given only to the block ("900 block of HARRISON ST").
     Use search_requests to find request IDs.
     """
+    log.info("get_request request_id=%s caller=%s", request_id, caller_email() or "local")
     request = BY_ID.get(request_id.strip())
     if request is None:
         raise ToolError(f"No request with id {request_id!r}. Use search_requests to find valid request IDs.")
-    return request.as_dict()
+    return _public(request)
 
 
 if __name__ == "__main__":
